@@ -2,10 +2,9 @@ from dataclasses import dataclass
 import json
 import os
 import assemblyai as aai
-from dotenv import load_dotenv
-import tempfile
-from pathlib import Path
 import logging
+import streamlit as st
+from pathlib import Path
 
 # Configuration du logging
 logging.basicConfig(level=logging.DEBUG)
@@ -45,27 +44,21 @@ class TranscriptionService:
     
     def __init__(self):
         logger.debug("Initialisation du TranscriptionService")
-        load_dotenv(override=True)  # Forcer le rechargement des variables d'environnement
         
-        # Vérifie le chemin du .env
-        logger.debug(f"Chemin de travail actuel: {os.getcwd()}")
-        
-        # Log toutes les variables d'environnement
-        use_mock = os.getenv('USE_MOCK')
+        # Récupérer les variables depuis secrets.toml
+        use_mock = st.secrets.get('USE_MOCK', False)  # Valeur par défaut à False
         logger.debug(f"Valeur brute de USE_MOCK: {use_mock}")
         
         # Modification de la logique de parsing de USE_MOCK
-        self.use_mock = False  # Valeur par défaut
-        if use_mock is not None:
-            self.use_mock = use_mock.lower() in ['true', '1', 'yes', 'y']
-            
+        self.use_mock = use_mock.lower() in ['true', '1', 'yes', 'y'] if isinstance(use_mock, str) else bool(use_mock)
+        
         logger.debug(f"use_mock après traitement: {self.use_mock}")
         
         if not self.use_mock:
             logger.debug("Mode réel activé, vérification de la clé API")
-            api_key = os.getenv('ASSEMBLYAI_API_KEY')
+            api_key = st.secrets["ASSEMBLYAI_API_KEY"]
             if not api_key:
-                raise ValueError("ASSEMBLYAI_API_KEY non définie dans les variables d'environnement")
+                raise ValueError("ASSEMBLYAI_API_KEY non définie dans les secrets")
             logger.debug("Clé API AssemblyAI trouvée")
             aai.settings.api_key = api_key
 
