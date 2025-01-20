@@ -1,98 +1,157 @@
 from reportlab.pdfgen import canvas
 from reportlab.lib.pagesizes import A4
-from reportlab.pdfbase import pdfmetrics
-from reportlab.pdfbase.ttfonts import TTFont
+from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+from reportlab.lib import colors
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
+from reportlab.lib.units import cm
 import tempfile
 import os
+from pathlib import Path
+from typing import Dict, Any, BinaryIO
+import logging
 
 class DocumentGenerator:
-    def generate_pdf(self, pv_data):
-        # Utiliser un fichier temporaire
-        with tempfile.NamedTemporaryFile(suffix='.pdf', delete=False) as tmp_file:
-            c = canvas.Canvas(tmp_file.name, pagesize=A4)
-            width, height = A4
-            
-            # Position initiale
-            y = height - 50
-            
-            # Titre
-            c.setFont("Helvetica-Bold", 16)
-            c.drawString(50, y, "Procès Verbal de CSE")
-            y -= 30
-            
-            # Contenu par section
-            c.setFont("Helvetica", 12)
-            for section, items in pv_data.items():
-                if not items:  # Si la section est vide
-                    continue
-                    
-                # Titre de section
-                c.setFont("Helvetica-Bold", 14)
-                y -= 20
-                c.drawString(50, y, section.capitalize())
-                y -= 20
-                
-                # Contenu de la section
-                c.setFont("Helvetica", 12)
-                
-                # Traitement différent selon la section
-                if section == "présences":
-                    # Pour la section présences, c'est une liste de noms
-                    text = "Personnes présentes : " + ", ".join(items)
-                    words = text.split()
-                    line = []
-                    for word in words:
-                        line.append(word)
-                        if len(' '.join(line)) > 80:
-                            c.drawString(50, y, ' '.join(line[:-1]))
-                            y -= 15
-                            line = [line[-1]]
-                    if line:
-                        c.drawString(50, y, ' '.join(line))
-                        y -= 25
-                else:
-                    # Pour les autres sections (discussions, décisions, votes)
-                    for item in items:
-                        # Nouvelle page si nécessaire
-                        if y < 50:
-                            c.showPage()
-                            y = height - 50
-                        
-                        if isinstance(item, dict):
-                            if 'speaker' in item and 'text' in item:
-                                speaker_text = f"{item['speaker']}: {item['text']}"
-                                
-                                # Découpage du texte en lignes de 80 caractères
-                                words = speaker_text.split()
-                                line = []
-                                for word in words:
-                                    line.append(word)
-                                    if len(' '.join(line)) > 80:
-                                        c.drawString(50, y, ' '.join(line[:-1]))
-                                        y -= 15
-                                        line = [line[-1]]
-                                
-                                if line:
-                                    c.drawString(50, y, ' '.join(line))
-                                    y -= 25
-                            else:
-                                # Pour les éléments qui n'ont pas speaker/text
-                                text = str(item)
-                                c.drawString(50, y, text)
-                                y -= 25
-                        else:
-                            # Pour les éléments qui ne sont pas des dictionnaires
-                            text = str(item)
-                            c.drawString(50, y, text)
-                            y -= 25
+    """Générateur de documents pour les PV"""
 
-            c.save()
+    def __init__(self):
+        self.styles = getSampleStyleSheet()
+        self._setup_custom_styles()
+
+    def _setup_custom_styles(self):
+        """Configure les styles personnalisés pour le document"""
+        # Vérifier si le style existe déjà avant de l'ajouter
+        if 'Normal' not in self.styles:
+            self.styles.add(ParagraphStyle(
+                name='Normal',
+                fontName='Helvetica',
+                fontSize=11,
+                leading=14,
+                spaceAfter=6
+            ))
+        
+        # Faire de même pour les autres styles
+        if 'Speaker' not in self.styles:
+            self.styles.add(ParagraphStyle(
+                name='Speaker',
+                parent=self.styles['Normal'],
+                fontName='Helvetica-Bold'
+            ))
+        
+        if 'Title' not in self.styles:
+            self.styles.add(ParagraphStyle(
+                name='Title',
+                parent=self.styles['Normal'],
+                fontName='Helvetica-Bold',
+                fontSize=14,
+                spaceAfter=12,
+                alignment=1  # Center alignment
+            ))
+        
+        self.styles.add(ParagraphStyle(
+            name='Titre',
+            parent=self.styles['Heading1'],
+            fontSize=16,
+            spaceAfter=30
+        ))
+        
+        self.styles.add(ParagraphStyle(
+            name='SectionTitle',
+            parent=self.styles['Heading2'],
+            fontSize=14,
+            spaceAfter=20,
+            spaceBefore=20
+        ))
+
+    def generate_pdf(self, pv_data: Dict[str, Any]) -> bytes:
+        """
+        Génère un PDF à partir des données du PV
+        
+        Args:
+            pv_data: Dictionnaire contenant les données du PV
             
-            # Lire le contenu du PDF
-            with open(tmp_file.name, 'rb') as file:
-                pdf_content = file.read()
+        Returns:
+            Le contenu du PDF en bytes
+        """
+        try:
+            with tempfile.NamedTemporaryFile(suffix='.pdf', delete=False) as tmp_file:
+                doc = SimpleDocTemplate(
+                    tmp_file.name,
+                    pagesize=A4,
+                    rightMargin=2*cm,
+                    leftMargin=2*cm,
+                    topMargin=2*cm,
+                    bottomMargin=2*cm
+                )
+                
+                story = self._create_document_content(pv_data)
+                doc.build(story)
+                
+                # Lire le contenu du PDF
+                with open(tmp_file.name, 'rb') as file:
+                    pdf_content = file.read()
+                
+                return pdf_content
+                
+        except Exception as e:
+            logging.error(f"Erreur lors de la génération du PDF: {str(e)}")
+            raise
+        finally:
+            if 'tmp_file' in locals():
+                os.unlink(tmp_file.name)
+
+    def _create_document_content(self, pv_data: Dict[str, Any]) -> list:
+        """Crée le contenu du document"""
+        story = []
+        
+        # Titre
+        story.append(Paragraph("Procès Verbal de CSE", self.styles['Titre']))
+        story.append(Spacer(1, 12))
+        
+        # Sections
+        for section, items in pv_data.items():
+            if not items:
+                continue
+                
+            story.append(Paragraph(
+                section.capitalize(),
+                self.styles['SectionTitle']
+            ))
             
-            # Nettoyer le fichier temporaire
-            os.unlink(tmp_file.name)
+            if section == "présences":
+                story.extend(self._format_presences(items))
+            else:
+                story.extend(self._format_discussions(items))
             
-            return pdf_content
+            story.append(Spacer(1, 12))
+        
+        return story
+
+    def _format_presences(self, presences: list) -> list:
+        """Formate la section des présences"""
+        return [
+            Paragraph(
+                f"Personnes présentes : {', '.join(presences)}",
+                self.styles['Normal']
+            )
+        ]
+
+    def _format_discussions(self, discussions: list) -> list:
+        """Formate la section des discussions"""
+        formatted = []
+        for item in discussions:
+            if isinstance(item, dict) and 'speaker' in item and 'text' in item:
+                text = f"<b>{item['speaker']}</b>: {item['text']}"
+                formatted.append(Paragraph(text, self.styles['Normal']))
+            else:
+                formatted.append(Paragraph(str(item), self.styles['Normal']))
+        return formatted
+
+    def generate_docx(self, pv_data: Dict[str, Any]) -> bytes:
+        """
+        Génère un document Word à partir des données du PV
+        
+        À implémenter selon les besoins
+        """
+        raise NotImplementedError(
+            "La génération de documents Word n'est pas encore implémentée"
+        )
