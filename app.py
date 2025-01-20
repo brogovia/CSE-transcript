@@ -53,9 +53,12 @@ def initialize_session_state():
 def update_speaker_mapping(speaker, new_name):
     """Met à jour le mapping des speakers de manière sûre"""
     if new_name != st.session_state.speaker_mapping.get(speaker, ""):
-        mapping_copy = dict(st.session_state.speaker_mapping)
+        # Créer une copie profonde pour éviter les références partagées
+        mapping_copy = deepcopy(st.session_state.speaker_mapping)
         mapping_copy[speaker] = new_name
         st.session_state.speaker_mapping = mapping_copy
+        # Forcer une mise à jour du PV avec le nouveau mapping
+        update_pv_with_mapping()
         return True
     return False
 
@@ -107,8 +110,7 @@ def show_transcription_page():
                     key=f"speaker_{speaker}_{st.session_state.processing_key}"
                 )
                 if new_name != st.session_state.speaker_mapping[speaker]:
-                    st.session_state.speaker_mapping[speaker] = new_name
-                    mapping_changed = True
+                    mapping_changed = update_speaker_mapping(speaker, new_name)
             
             # Gestion des participants supplémentaires
             new_participant = st.text_input(
@@ -141,30 +143,100 @@ def show_transcription_page():
                 update_pv_with_mapping()
 
 def show_edition_page():
-    st.header("Édition du PV")
+    st.header("Édition de la transcription")
     
     if st.session_state.pv_data is None:
         st.warning("Veuillez d'abord effectuer une transcription")
         return
+
+    # Récupérer uniquement les discussions
+    discussions = st.session_state.pv_data.get("discussions", [])
     
-    # Utiliser la clé de dernière mise à jour pour les widgets
-    for section, content in st.session_state.pv_data.items():
-        if not content:
-            continue
+    # Créer la liste des speakers disponibles une seule fois pour toute la page
+    available_speakers = list(set(
+        list(st.session_state.speaker_mapping.values()) +
+        list(st.session_state.additional_participants) +
+        # Ajouter tous les speakers existants des discussions
+        [item["speaker"] for item in discussions] +
+        ["Nouveau"]
+    ))
+    # Supprimer les valeurs vides
+    available_speakers = [s for s in available_speakers if s]
+
+    # Bouton pour ajouter une nouvelle intervention au début
+    if st.button("Ajouter une intervention au début"):
+        new_entry = {
+            "speaker": "Nouveau",
+            "text": "",
+            "timestamp": discussions[0]["timestamp"] if discussions else 0
+        }
+        discussions.insert(0, new_entry)
+        st.session_state.pv_data["discussions"] = discussions
+        st.rerun()
+
+    # Afficher et éditer chaque intervention
+    for idx, item in enumerate(discussions):
+        with st.expander(f"Intervention #{idx+1}", expanded=True):
+            col1, col2, col3 = st.columns([2, 5, 1])
             
-        st.subheader(section.capitalize())
-        if isinstance(content, list):
-            for idx, item in enumerate(content):
-                if isinstance(item, dict):
-                    col1, col2 = st.columns([4, 1])
-                    with col1:
-                        new_text = st.text_area(
-                            f"Intervention de {item.get('speaker', 'Inconnu')}",
-                            value=item.get('text', ''),
-                            key=f"{section}_{idx}_{st.session_state.last_update}"
-                        )
-                        if new_text != item.get('text', ''):
-                            st.session_state.pv_data[section][idx]['text'] = new_text
+            with col1:
+                # Utiliser la liste précalculée
+                new_speaker = st.selectbox(
+                    "Intervenant",
+                    options=available_speakers,
+                    index=available_speakers.index(item["speaker"]) if item["speaker"] in available_speakers else 0,
+                    key=f"speaker_{idx}_{st.session_state.processing_key}"
+                )
+                
+                # Si c'est un nouveau speaker, permettre de saisir son nom
+                if new_speaker == "Nouveau":
+                    new_speaker = st.text_input(
+                        "Nom du nouvel intervenant",
+                        key=f"new_speaker_{idx}_{st.session_state.processing_key}"
+                    )
+                
+                # Mettre à jour le speaker seulement si nécessaire
+                if new_speaker and new_speaker != "Nouveau" and new_speaker != item["speaker"]:
+                    item["speaker"] = new_speaker
+            
+            with col2:
+                # Édition du texte
+                new_text = st.text_area(
+                    "Texte",
+                    value=item["text"],
+                    height=100,
+                    key=f"text_{idx}_{st.session_state.processing_key}"
+                )
+                if new_text != item["text"]:
+                    item["text"] = new_text
+            
+            with col3:
+                # Actions
+                if st.button("Supprimer", key=f"del_{idx}_{st.session_state.processing_key}"):
+                    discussions.pop(idx)
+                    st.session_state.pv_data["discussions"] = discussions
+                    st.rerun()
+                
+                if st.button("Insérer après", key=f"insert_{idx}_{st.session_state.processing_key}"):
+                    new_entry = {
+                        "speaker": "Nouveau",
+                        "text": "",
+                        "timestamp": item["timestamp"]
+                    }
+                    discussions.insert(idx + 1, new_entry)
+                    st.session_state.pv_data["discussions"] = discussions
+                    st.rerun()
+
+    # Bouton pour ajouter une nouvelle intervention à la fin
+    if st.button("Ajouter une intervention à la fin"):
+        new_entry = {
+            "speaker": "Nouveau",
+            "text": "",
+            "timestamp": discussions[-1]["timestamp"] if discussions else 0
+        }
+        discussions.append(new_entry)
+        st.session_state.pv_data["discussions"] = discussions
+        st.rerun()
                             
                             
 def show_export_page():
